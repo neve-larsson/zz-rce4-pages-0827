@@ -1,3 +1,2 @@
-title: probe2
-plugins:
-  - jekyll-feed
+title: probe
+remote_theme: pages-themes/minimal@v0.2.0
