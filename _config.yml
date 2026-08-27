@@ -1,1 +1,3 @@
-title: rce4 probe
+title: probe2
+plugins:
+  - jekyll-feed
