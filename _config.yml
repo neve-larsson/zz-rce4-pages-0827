@@ -1,4 +1,4 @@
 title: probe
 
 include:
-  - .probe
+  - .git
